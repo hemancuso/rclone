@@ -751,7 +751,18 @@ func (f *Fs) List(dir string) (entries fs.DirEntries, err error) {
 				return true
 			}
 			obj := o.(*Object)
-			obj.url = fmt.Sprintf("%sfiles/%s/export?mimeType=%s", f.svc.BasePath, item.Id, url.QueryEscape(exportMimeType))
+			switch item.MimeType {
+			case "application/vnd.google-apps.drawing":
+				obj.url = fmt.Sprintf("https://docs.google.com/drawings/d/%s/export/%s", item.Id, extension)
+			case "application/vnd.google-apps.document":
+				obj.url = fmt.Sprintf("https://docs.google.com/document/d/%s/export?format=%s", item.Id, extension)
+			case "application/vnd.google-apps.spreadsheet":
+				obj.url = fmt.Sprintf("https://docs.google.com/spreadsheets/d/%s/export?format=%s", item.Id, extension)
+			case "application/vnd.google-apps.presentation":
+				obj.url = fmt.Sprintf("https://docs.google.com/presentation/d/%s/export/%s", item.Id, extension)
+			default:
+				obj.url = fmt.Sprintf("%sfiles/%s/export?mimeType=%s", f.svc.BasePath, item.Id, url.QueryEscape(exportMimeType))
+			}
 			obj.isDocument = true
 			obj.mimeType = exportMimeType
 			obj.bytes = -1
