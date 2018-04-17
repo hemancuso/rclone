@@ -13,7 +13,7 @@ import (
 	"path"
 	"regexp"
 	"runtime"
-	"runtime/pprof"
+	// "runtime/pprof"
 	"time"
 
 	"github.com/pkg/errors"
@@ -37,8 +37,8 @@ import (
 // Globals
 var (
 	// Flags
-	cpuProfile    = flags.StringP("cpuprofile", "", "", "Write cpu profile to file")
-	memProfile    = flags.StringP("memprofile", "", "", "Write memory profile to file")
+	// cpuProfile    = flags.StringP("cpuprofile", "", "", "Write cpu profile to file")
+	// memProfile    = flags.StringP("memprofile", "", "", "Write memory profile to file")
 	statsInterval = flags.DurationP("stats", "", time.Minute*1, "Interval between printing stats, e.g 500ms, 60s, 5m. (0 to disable)")
 	dataRateUnit  = flags.StringP("stats-unit", "", "bytes", "Show data rate in stats as either 'bits' or 'bytes'/s")
 	version       bool
@@ -125,9 +125,9 @@ func runRoot(cmd *cobra.Command, args []string) {
 
 func init() {
 	// Add global flags
-	configflags.AddFlags(pflag.CommandLine)
-	filterflags.AddFlags(pflag.CommandLine)
-	rcflags.AddFlags(pflag.CommandLine)
+	// configflags.AddFlags(pflag.CommandLine)
+	// filterflags.AddFlags(pflag.CommandLine)
+	// rcflags.AddFlags(pflag.CommandLine)
 
 	Root.Run = runRoot
 	Root.Flags().BoolVarP(&version, "version", "V", false, "Print the version number")
@@ -386,44 +386,44 @@ func initConfig() {
 	rc.Start(&rcflags.Opt)
 
 	// Setup CPU profiling if desired
-	if *cpuProfile != "" {
-		fs.Infof(nil, "Creating CPU profile %q\n", *cpuProfile)
-		f, err := os.Create(*cpuProfile)
-		if err != nil {
-			fs.CountError(err)
-			log.Fatal(err)
-		}
-		err = pprof.StartCPUProfile(f)
-		if err != nil {
-			fs.CountError(err)
-			log.Fatal(err)
-		}
-		atexit.Register(func() {
-			pprof.StopCPUProfile()
-		})
-	}
+	// if *cpuProfile != "" {
+	// 	fs.Infof(nil, "Creating CPU profile %q\n", *cpuProfile)
+	// 	f, err := os.Create(*cpuProfile)
+	// 	if err != nil {
+	// 		fs.CountError(err)
+	// 		log.Fatal(err)
+	// 	}
+	// 	err = pprof.StartCPUProfile(f)
+	// 	if err != nil {
+	// 		fs.CountError(err)
+	// 		log.Fatal(err)
+	// 	}
+	// 	atexit.Register(func() {
+	// 		pprof.StopCPUProfile()
+	// 	})
+	// }
 
-	// Setup memory profiling if desired
-	if *memProfile != "" {
-		atexit.Register(func() {
-			fs.Infof(nil, "Saving Memory profile %q\n", *memProfile)
-			f, err := os.Create(*memProfile)
-			if err != nil {
-				fs.CountError(err)
-				log.Fatal(err)
-			}
-			err = pprof.WriteHeapProfile(f)
-			if err != nil {
-				fs.CountError(err)
-				log.Fatal(err)
-			}
-			err = f.Close()
-			if err != nil {
-				fs.CountError(err)
-				log.Fatal(err)
-			}
-		})
-	}
+	// // Setup memory profiling if desired
+	// if *memProfile != "" {
+	// 	atexit.Register(func() {
+	// 		fs.Infof(nil, "Saving Memory profile %q\n", *memProfile)
+	// 		f, err := os.Create(*memProfile)
+	// 		if err != nil {
+	// 			fs.CountError(err)
+	// 			log.Fatal(err)
+	// 		}
+	// 		err = pprof.WriteHeapProfile(f)
+	// 		if err != nil {
+	// 			fs.CountError(err)
+	// 			log.Fatal(err)
+	// 		}
+	// 		err = f.Close()
+	// 		if err != nil {
+	// 			fs.CountError(err)
+	// 			log.Fatal(err)
+	// 		}
+	// 	})
+	// }
 
 	if m, _ := regexp.MatchString("^(bits|bytes)$", *dataRateUnit); m == false {
 		fs.Errorf(nil, "Invalid unit passed to --stats-unit. Defaulting to bytes.")
