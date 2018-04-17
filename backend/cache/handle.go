@@ -1,11 +1,10 @@
-// +build !plan9,go1.7
+// +build !plan9
 
 package cache
 
 import (
 	"fmt"
 	"io"
-	"os"
 	"sync"
 	"time"
 
@@ -255,7 +254,7 @@ func (r *Handle) getChunk(chunkStart int64) ([]byte, error) {
 
 	// first chunk will be aligned with the start
 	if offset > 0 {
-		if offset >= int64(len(data)) {
+		if offset > int64(len(data)) {
 			fs.Errorf(r, "unexpected conditions during reading. current position: %v, current chunk position: %v, current chunk size: %v, offset: %v, chunk size: %v, file size: %v",
 				r.offset, chunkStart, len(data), offset, r.cacheFs().chunkSize, r.cachedObject.Size())
 			return nil, io.ErrUnexpectedEOF
@@ -282,8 +281,10 @@ func (r *Handle) Read(p []byte) (n int, err error) {
 	}
 	currentOffset := r.offset
 	buf, err = r.getChunk(currentOffset)
-	if err != nil && len(buf) == 0 {
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 		fs.Errorf(r, "(%v/%v) error (%v) response", currentOffset, r.cachedObject.Size(), err)
+	}
+	if len(buf) == 0 && err != io.ErrUnexpectedEOF {
 		return 0, io.EOF
 	}
 	readSize := copy(p, buf)
@@ -312,6 +313,7 @@ func (r *Handle) Close() error {
 			waitIdx++
 		}
 	}
+	r.memory.db.Flush()
 
 	fs.Debugf(r, "cache reader closed %v", r.offset)
 	return nil
@@ -324,13 +326,13 @@ func (r *Handle) Seek(offset int64, whence int) (int64, error) {
 
 	var err error
 	switch whence {
-	case os.SEEK_SET:
+	case io.SeekStart:
 		fs.Debugf(r, "moving offset set from %v to %v", r.offset, offset)
 		r.offset = offset
-	case os.SEEK_CUR:
+	case io.SeekCurrent:
 		fs.Debugf(r, "moving offset cur from %v to %v", r.offset, r.offset+offset)
 		r.offset += offset
-	case os.SEEK_END:
+	case io.SeekEnd:
 		fs.Debugf(r, "moving offset end (%v) from %v to %v", r.cachedObject.Size(), r.offset, r.cachedObject.Size()+offset)
 		r.offset = r.cachedObject.Size() + offset
 	default:
@@ -379,10 +381,10 @@ func (w *worker) reader(offset, end int64, closeOpen bool) (io.ReadCloser, error
 
 	if !closeOpen {
 		if do, ok := r.(fs.RangeSeeker); ok {
-			_, err = do.RangeSeek(offset, os.SEEK_SET, end-offset)
+			_, err = do.RangeSeek(offset, io.SeekStart, end-offset)
 			return r, err
 		} else if do, ok := r.(io.Seeker); ok {
-			_, err = do.Seek(offset, os.SEEK_SET)
+			_, err = do.Seek(offset, io.SeekStart)
 			return r, err
 		}
 	}

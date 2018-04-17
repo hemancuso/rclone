@@ -5,6 +5,7 @@
 package sftp
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -27,7 +28,6 @@ import (
 	"github.com/pkg/sftp"
 	"github.com/xanzy/ssh-agent"
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/net/context"
 	"golang.org/x/time/rate"
 )
 
@@ -905,7 +905,7 @@ func (o *Object) Open(options ...fs.OpenOption) (in io.ReadCloser, err error) {
 		return nil, errors.Wrap(err, "Open failed")
 	}
 	if offset > 0 {
-		off, err := sftpFile.Seek(offset, 0)
+		off, err := sftpFile.Seek(offset, io.SeekStart)
 		if err != nil || off != offset {
 			return nil, errors.Wrap(err, "Open Seek failed")
 		}

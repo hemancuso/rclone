@@ -30,12 +30,14 @@ import (
 )
 
 var (
-	stdio bool
+	stdio      bool
+	appendOnly bool
 )
 
 func init() {
 	httpflags.AddFlags(Command.Flags())
 	Command.Flags().BoolVar(&stdio, "stdio", false, "run an HTTP2 server on stdin/stdout")
+	Command.Flags().BoolVar(&appendOnly, "append-only", false, "disallow deletion of repository data")
 }
 
 // Command definition for cobra
@@ -167,8 +169,12 @@ func newServer(f fs.Fs, opt *httplib.Options) *server {
 
 // serve runs the http server - doesn't return
 func (s *server) serve() {
+	err := s.srv.Serve()
+	if err != nil {
+		fs.Errorf(s.f, "Opening listener: %v", err)
+	}
 	fs.Logf(s.f, "Serving restic REST API on %s", s.srv.URL())
-	s.srv.Serve()
+	s.srv.Wait()
 }
 
 var matchData = regexp.MustCompile("(?:^|/)data/([^/]{2,})$")
@@ -314,6 +320,16 @@ func (s *server) getObject(w http.ResponseWriter, r *http.Request, remote string
 
 // postObject posts an object to the repository
 func (s *server) postObject(w http.ResponseWriter, r *http.Request, remote string) {
+	if appendOnly {
+		// make sure the file does not exist yet
+		_, err := s.f.NewObject(remote)
+		if err == nil {
+			fs.Errorf(remote, "Post request: file already exists, refusing to overwrite in append-only mode")
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+			return
+		}
+	}
+
 	// fs.Debugf(s.f, "content length = %d", r.ContentLength)
 	if r.ContentLength >= 0 {
 		// Size known use Put
@@ -355,6 +371,16 @@ func (s *server) postObject(w http.ResponseWriter, r *http.Request, remote strin
 
 // delete the remote
 func (s *server) deleteObject(w http.ResponseWriter, r *http.Request, remote string) {
+	if appendOnly {
+		parts := strings.Split(r.URL.Path, "/")
+
+		// if path doesn't end in "/locks/:name", disallow the operation
+		if len(parts) < 2 || parts[len(parts)-2] != "locks" {
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+			return
+		}
+	}
+
 	o, err := s.f.NewObject(remote)
 	if err != nil {
 		fs.Debugf(remote, "Delete request error: %v", err)

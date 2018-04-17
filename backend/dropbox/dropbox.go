@@ -1,7 +1,4 @@
 // Package dropbox provides an interface to Dropbox object storage
-
-// +build go1.7
-
 package dropbox
 
 // FIXME dropbox for business would be quite easy to add
@@ -25,7 +22,6 @@ of path_display and all will be well.
 */
 
 import (
-	"crypto/md5"
 	"fmt"
 	"io"
 	"log"
@@ -36,6 +32,7 @@ import (
 
 	"github.com/dropbox/dropbox-sdk-go-unofficial/dropbox"
 	"github.com/dropbox/dropbox-sdk-go-unofficial/dropbox/files"
+	"github.com/dropbox/dropbox-sdk-go-unofficial/dropbox/sharing"
 	"github.com/ncw/rclone/fs"
 	"github.com/ncw/rclone/fs/config"
 	"github.com/ncw/rclone/fs/config/flags"
@@ -126,13 +123,14 @@ func init() {
 
 // Fs represents a remote dropbox server
 type Fs struct {
-	name           string       // name of this remote
-	root           string       // the path we are working on
-	features       *fs.Features // optional features
-	srv            files.Client // the connection to the dropbox server
-	slashRoot      string       // root with "/" prefix, lowercase
-	slashRootSlash string       // root with "/" prefix and postfix, lowercase
-	pacer          *pacer.Pacer // To pace the API calls
+	name           string         // name of this remote
+	root           string         // the path we are working on
+	features       *fs.Features   // optional features
+	srv            files.Client   // the connection to the dropbox server
+	sharingClient  sharing.Client // as above, but for generating sharing links
+	slashRoot      string         // root with "/" prefix, lowercase
+	slashRootSlash string         // root with "/" prefix and postfix, lowercase
+	pacer          *pacer.Pacer   // To pace the API calls
 }
 
 // Object describes a dropbox object
@@ -210,11 +208,13 @@ func NewFs(name, root string) (fs.Fs, error) {
 		Client:   oAuthClient,    // maybe???
 	}
 	srv := files.New(config)
+	sharingClient := sharing.New(config)
 
 	f := &Fs{
-		name:  name,
-		srv:   srv,
-		pacer: pacer.New().SetMinSleep(minSleep).SetMaxSleep(maxSleep).SetDecayConstant(decayConstant),
+		name:          name,
+		srv:           srv,
+		sharingClient: sharingClient,
+		pacer:         pacer.New().SetMinSleep(minSleep).SetMaxSleep(maxSleep).SetDecayConstant(decayConstant),
 	}
 	f.features = (&fs.Features{
 		CaseInsensitive:         true,
@@ -240,11 +240,9 @@ func NewFs(name, root string) (fs.Fs, error) {
 // Sets root in f
 func (f *Fs) setRoot(root string) {
 	f.root = strings.Trim(root, "/")
-	lowerCaseRoot := strings.ToLower(f.root)
-
-	f.slashRoot = "/" + lowerCaseRoot
+	f.slashRoot = "/" + f.root
 	f.slashRootSlash = f.slashRoot
-	if lowerCaseRoot != "" {
+	if f.root != "" {
 		f.slashRootSlash += "/"
 	}
 }
@@ -640,6 +638,52 @@ func (f *Fs) Move(src fs.Object, remote string) (fs.Object, error) {
 	return dstObj, nil
 }
 
+// PublicLink adds a "readable by anyone with link" permission on the given file or folder.
+func (f *Fs) PublicLink(remote string) (link string, err error) {
+	absPath := "/" + path.Join(f.Root(), remote)
+	fs.Debugf(f, "attempting to share '%s' (absolute path: %s)", remote, absPath)
+	createArg := sharing.CreateSharedLinkWithSettingsArg{
+		Path: absPath,
+	}
+	var linkRes sharing.IsSharedLinkMetadata
+	err = f.pacer.Call(func() (bool, error) {
+		linkRes, err = f.sharingClient.CreateSharedLinkWithSettings(&createArg)
+		return shouldRetry(err)
+	})
+
+	if err != nil && strings.Contains(err.Error(), sharing.CreateSharedLinkWithSettingsErrorSharedLinkAlreadyExists) {
+		fs.Debugf(absPath, "has a public link already, attempting to retrieve it")
+		listArg := sharing.ListSharedLinksArg{
+			Path:       absPath,
+			DirectOnly: true,
+		}
+		var listRes *sharing.ListSharedLinksResult
+		err = f.pacer.Call(func() (bool, error) {
+			listRes, err = f.sharingClient.ListSharedLinks(&listArg)
+			return shouldRetry(err)
+		})
+		if err != nil {
+			return
+		}
+		if len(listRes.Links) == 0 {
+			err = errors.New("Dropbox says the sharing link already exists, but list came back empty")
+			return
+		}
+		linkRes = listRes.Links[0]
+	}
+	if err == nil {
+		switch res := linkRes.(type) {
+		case *sharing.FileLinkMetadata:
+			link = res.Url
+		case *sharing.FolderLinkMetadata:
+			link = res.Url
+		default:
+			err = fmt.Errorf("Don't know how to extract link, response has unknown format: %T", res)
+		}
+	}
+	return
+}
+
 // DirMove moves src, srcRemote to this remote at dstRemote
 // using server side move operations.
 //
@@ -758,20 +802,6 @@ func (o *Object) remotePath() string {
 	return o.fs.slashRootSlash + o.remote
 }
 
-// Returns the key for the metadata database for a given path
-func metadataKey(path string) string {
-	// NB File system is case insensitive
-	path = strings.ToLower(path)
-	hash := md5.New()
-	_, _ = hash.Write([]byte(path))
-	return fmt.Sprintf("%x", hash.Sum(nil))
-}
-
-// Returns the key for the metadata database
-func (o *Object) metadataKey() string {
-	return metadataKey(o.remotePath())
-}
-
 // readMetaData gets the info if it hasn't already been fetched
 func (o *Object) readMetaData() (err error) {
 	if !o.modTime.IsZero() {
@@ -801,7 +831,7 @@ func (o *Object) SetModTime(modTime time.Time) error {
 	// Dropbox doesn't have a way of doing this so returning this
 	// error will cause the file to be deleted first then
 	// re-uploaded to set the time.
-	return fs.ErrorCantSetModTime
+	return fs.ErrorCantSetModTimeWithoutDelete
 }
 
 // Storable returns whether this object is storable
@@ -859,7 +889,7 @@ func (o *Object) uploadChunked(in0 io.Reader, commitInfo *files.CommitInfo, size
 	chunk := readers.NewRepeatableLimitReaderBuffer(in, buf, chunkSize)
 	err = o.fs.pacer.Call(func() (bool, error) {
 		// seek to the start in case this is a retry
-		if _, err = chunk.Seek(0, 0); err != nil {
+		if _, err = chunk.Seek(0, io.SeekStart); err != nil {
 			return false, nil
 		}
 		res, err = o.fs.srv.UploadSessionStart(&files.UploadSessionStartArg{}, chunk)
@@ -895,7 +925,7 @@ func (o *Object) uploadChunked(in0 io.Reader, commitInfo *files.CommitInfo, size
 		chunk = readers.NewRepeatableLimitReaderBuffer(in, buf, chunkSize)
 		err = o.fs.pacer.Call(func() (bool, error) {
 			// seek to the start in case this is a retry
-			if _, err = chunk.Seek(0, 0); err != nil {
+			if _, err = chunk.Seek(0, io.SeekStart); err != nil {
 				return false, nil
 			}
 			err = o.fs.srv.UploadSessionAppendV2(&appendArg, chunk)
@@ -918,7 +948,7 @@ func (o *Object) uploadChunked(in0 io.Reader, commitInfo *files.CommitInfo, size
 	chunk = readers.NewRepeatableReaderBuffer(in, buf)
 	err = o.fs.pacer.Call(func() (bool, error) {
 		// seek to the start in case this is a retry
-		if _, err = chunk.Seek(0, 0); err != nil {
+		if _, err = chunk.Seek(0, io.SeekStart); err != nil {
 			return false, nil
 		}
 		entry, err = o.fs.srv.UploadSessionFinish(args, chunk)
@@ -975,11 +1005,12 @@ func (o *Object) Remove() (err error) {
 
 // Check the interfaces are satisfied
 var (
-	_ fs.Fs          = (*Fs)(nil)
-	_ fs.Copier      = (*Fs)(nil)
-	_ fs.Purger      = (*Fs)(nil)
-	_ fs.PutStreamer = (*Fs)(nil)
-	_ fs.Mover       = (*Fs)(nil)
-	_ fs.DirMover    = (*Fs)(nil)
-	_ fs.Object      = (*Object)(nil)
+	_ fs.Fs           = (*Fs)(nil)
+	_ fs.Copier       = (*Fs)(nil)
+	_ fs.Purger       = (*Fs)(nil)
+	_ fs.PutStreamer  = (*Fs)(nil)
+	_ fs.Mover        = (*Fs)(nil)
+	_ fs.PublicLinker = (*Fs)(nil)
+	_ fs.DirMover     = (*Fs)(nil)
+	_ fs.Object       = (*Object)(nil)
 )

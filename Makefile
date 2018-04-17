@@ -109,7 +109,7 @@ upload_website:	website
 	rclone -v sync docs/public memstore:www-rclone-org
 
 tarball:
-	git archive -9 --format=tar.gz --prefix=rclone-$(TAG) -o build/rclone-$(TAG).tar.gz $(TAG)
+	git archive -9 --format=tar.gz --prefix=rclone-$(TAG)/ -o build/rclone-$(TAG).tar.gz $(TAG)
 
 sign_upload:
 	cd build && md5sum rclone-* | gpg --clearsign > MD5SUMS
@@ -192,9 +192,6 @@ retag:
 startdev:
 	echo -e "package fs\n\n// Version of rclone\nvar Version = \"$(LAST_TAG)-DEV\"\n" | gofmt > fs/version.go
 	git commit -m "Start $(LAST_TAG)-DEV development" fs/version.go
-
-gen_tests:
-	cd fstest/fstests && go generate
 
 winzip:
 	zip -9 rclone-$(TAG).zip rclone.exe

@@ -2,6 +2,7 @@
 package sync
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"sync"
@@ -14,7 +15,6 @@ import (
 	"github.com/ncw/rclone/fs/march"
 	"github.com/ncw/rclone/fs/operations"
 	"github.com/pkg/errors"
-	"golang.org/x/net/context"
 )
 
 type syncCopyMove struct {
@@ -399,7 +399,7 @@ func (s *syncCopyMove) stopDeleters() {
 // checkSrcMap is clear then it assumes that the any source files that
 // have been found have been removed from dstFiles already.
 func (s *syncCopyMove) deleteFiles(checkSrcMap bool) error {
-	if accounting.Stats.Errored() {
+	if accounting.Stats.Errored() && !fs.Config.IgnoreErrors {
 		fs.Errorf(s.fdst, "%v", fs.ErrorNotDeleting)
 		return fs.ErrorNotDeleting
 	}
@@ -430,7 +430,7 @@ func deleteEmptyDirectories(f fs.Fs, entries fs.DirEntries) error {
 	if len(entries) == 0 {
 		return nil
 	}
-	if accounting.Stats.Errored() {
+	if accounting.Stats.Errored() && !fs.Config.IgnoreErrors {
 		fs.Errorf(f, "%v", fs.ErrorNotDeletingDirs)
 		return fs.ErrorNotDeletingDirs
 	}
@@ -624,7 +624,7 @@ func (s *syncCopyMove) run() error {
 
 	// Delete files after
 	if s.deleteMode == fs.DeleteModeAfter {
-		if s.currentError() != nil {
+		if s.currentError() != nil && !fs.Config.IgnoreErrors {
 			fs.Errorf(s.fdst, "%v", fs.ErrorNotDeleting)
 		} else {
 			s.processError(s.deleteFiles(false))
@@ -633,7 +633,7 @@ func (s *syncCopyMove) run() error {
 
 	// Prune empty directories
 	if s.deleteMode != fs.DeleteModeOff {
-		if s.currentError() != nil {
+		if s.currentError() != nil && !fs.Config.IgnoreErrors {
 			fs.Errorf(s.fdst, "%v", fs.ErrorNotDeletingDirs)
 		} else {
 			s.processError(deleteEmptyDirectories(s.fdst, s.dstEmptyDirs))

@@ -799,6 +799,19 @@ This can be useful when transferring to a remote which doesn't support
 mod times directly as it is more accurate than a `--size-only` check
 and faster than using `--checksum`.
 
+### --use-server-modtime ###
+
+Some object-store backends (e.g, Swift, S3) do not preserve file modification
+times (modtime). On these backends, rclone stores the original modtime as
+additional metadata on the object. By default it will make an API call to
+retrieve the metadata when the modtime is needed by an operation.
+
+Use this flag to disable the extra API call and rely instead on the server's
+modified time. In cases such as a local to remote sync, knowing the local file
+is newer than the time it was last uploaded to the remote is sufficient. In
+those cases, this flag can speed up the process and reduce the number of API
+calls necessary.
+
 ### -v, -vv, --verbose ###
 
 With `-v` rclone will tell you about each file that is transferred and
@@ -952,6 +965,17 @@ only.
 
 Dump the filters to the output.  Useful to see exactly what include
 and exclude options are filtering on.
+
+#### --dump goroutines ####
+
+This dumps a list of the running go-routines at the end of the command
+to standard output.
+
+#### --dump openfiles ####
+
+This dumps a list of the open files at the end of the command.  It
+uses the `lsof` command to do that so you'll need that installed to
+use it.
 
 ### --memprofile=FILE ###
 

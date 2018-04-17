@@ -34,7 +34,7 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
-	"google.golang.org/api/drive/v3"
+	drive "google.golang.org/api/drive/v3"
 	"google.golang.org/api/googleapi"
 )
 
@@ -551,24 +551,28 @@ func NewFs(name, path string) (fs.Fs, error) {
 	if err != nil {
 		// Assume it is a file
 		newRoot, remote := dircache.SplitPath(root)
-		newF := *f
-		newF.dirCache = dircache.New(newRoot, f.rootFolderID, &newF)
-		newF.root = newRoot
+		tempF := *f
+		tempF.dirCache = dircache.New(newRoot, f.rootFolderID, &tempF)
+		tempF.root = newRoot
 		// Make new Fs which is the parent
-		err = newF.dirCache.FindRoot(false)
+		err = tempF.dirCache.FindRoot(false)
 		if err != nil {
 			// No root so return old f
 			return f, nil
 		}
-		entries, err := newF.List("")
+		entries, err := tempF.List("")
 		if err != nil {
 			// unable to list folder so return old f
 			return f, nil
 		}
 		for _, e := range entries {
 			if _, isObject := e.(fs.Object); isObject && e.Remote() == remote {
-				// return an error with an fs which points to the parent
-				return &newF, fs.ErrorIsFile
+				// XXX: update the old f here instead of returning tempF, since
+				// `features` were already filled with functions having *f as a receiver.
+				// See https://github.com/ncw/rclone/issues/2182
+				f.dirCache = tempF.dirCache
+				f.root = tempF.root
+				return f, fs.ErrorIsFile
 			}
 		}
 		// File doesn't exist so return old f
@@ -881,9 +885,9 @@ func (f *Fs) MergeDirs(dirs []fs.Directory) error {
 			}
 		}
 		// rmdir (into trash) the now empty source directory
+		fs.Infof(srcDir, "removing empty directory")
 		err = f.rmdir(srcDir.ID(), true)
 		if err != nil {
-			fs.Infof(srcDir, "removing empty directory")
 			return errors.Wrapf(err, "MergDirs move failed to rmdir %q", srcDir)
 		}
 	}
@@ -1091,6 +1095,41 @@ func (f *Fs) Move(src fs.Object, remote string) (fs.Object, error) {
 	return dstObj, nil
 }
 
+// PublicLink adds a "readable by anyone with link" permission on the given file or folder.
+func (f *Fs) PublicLink(remote string) (link string, err error) {
+	id, err := f.dirCache.FindDir(remote, false)
+	if err == nil {
+		fs.Debugf(f, "attempting to share directory '%s'", remote)
+	} else {
+		fs.Debugf(f, "attempting to share single file '%s'", remote)
+		o := &Object{
+			fs:     f,
+			remote: remote,
+		}
+		if err = o.readMetaData(); err != nil {
+			return
+		}
+		id = o.id
+	}
+
+	permission := &drive.Permission{
+		AllowFileDiscovery: false,
+		Role:               "reader",
+		Type:               "anyone",
+	}
+
+	err = f.pacer.Call(func() (bool, error) {
+		// TODO: On TeamDrives this might fail if lacking permissions to change ACLs.
+		// Need to either check `canShare` attribute on the object or see if a sufficient permission is already present.
+		_, err = f.svc.Permissions.Create(id, permission).Fields(googleapi.Field("id")).SupportsTeamDrives(f.isTeamDrive).Do()
+		return shouldRetry(err)
+	})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("https://drive.google.com/open?id=%s", id), nil
+}
+
 // DirMove moves src, srcRemote to this remote at dstRemote
 // using server side move operations.
 //
@@ -1156,10 +1195,16 @@ func (f *Fs) DirMove(src fs.Fs, srcRemote, dstRemote string) error {
 	}
 
 	// Find ID of src parent
-	_, srcDirectoryID, err := srcFs.dirCache.FindPath(srcRemote, false)
+	var srcDirectoryID string
+	if srcRemote == "" {
+		srcDirectoryID, err = srcFs.dirCache.RootParentID()
+	} else {
+		_, srcDirectoryID, err = srcFs.dirCache.FindPath(srcRemote, false)
+	}
 	if err != nil {
 		return err
 	}
+
 	// Find ID of src
 	srcID, err := srcFs.dirCache.FindDir(srcRemote, false)
 	if err != nil {
@@ -1448,6 +1493,12 @@ func (o *Object) httpResponse(method string, options []fs.OpenOption) (req *http
 	fs.OpenOptionAddHTTPHeaders(req.Header, options)
 	err = o.fs.pacer.Call(func() (bool, error) {
 		res, err = o.fs.client.Do(req)
+		if err == nil {
+			err = googleapi.CheckResponse(res)
+			if err != nil {
+				_ = res.Body.Close() // ignore error
+			}
+		}
 		return shouldRetry(err)
 	})
 	if err != nil {
@@ -1493,14 +1544,9 @@ var _ io.ReadCloser = &openFile{}
 
 // Open an object for read
 func (o *Object) Open(options ...fs.OpenOption) (in io.ReadCloser, err error) {
-	req, res, err := o.httpResponse("GET", options)
+	_, res, err := o.httpResponse("GET", options)
 	if err != nil {
-		return nil, err
-	}
-	_, isRanging := req.Header["Range"]
-	if !(res.StatusCode == http.StatusOK || (isRanging && res.StatusCode == http.StatusPartialContent)) {
-		_ = res.Body.Close() // ignore error
-		return nil, errors.Errorf("bad response: %d: %s", res.StatusCode, res.Status)
+		return nil, errors.Wrap(err, "open file failed")
 	}
 	// If it is a document, update the size with what we are
 	// reading as it can change from the HEAD in the listing to
@@ -1593,6 +1639,7 @@ var (
 	_ fs.DirCacheFlusher = (*Fs)(nil)
 	_ fs.ChangeNotifier  = (*Fs)(nil)
 	_ fs.PutUncheckeder  = (*Fs)(nil)
+	_ fs.PublicLinker    = (*Fs)(nil)
 	_ fs.MergeDirser     = (*Fs)(nil)
 	_ fs.Object          = (*Object)(nil)
 	_ fs.MimeTyper       = &Object{}

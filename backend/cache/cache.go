@@ -1,20 +1,19 @@
-// +build !plan9,go1.7
+// +build !plan9
 
 package cache
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"path"
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
-
-	"os"
-
-	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/ncw/rclone/backend/crypt"
 	"github.com/ncw/rclone/fs"
@@ -26,7 +25,6 @@ import (
 	"github.com/ncw/rclone/fs/walk"
 	"github.com/ncw/rclone/lib/atexit"
 	"github.com/pkg/errors"
-	"golang.org/x/net/context"
 	"golang.org/x/time/rate"
 )
 
@@ -499,17 +497,12 @@ func (f *Fs) httpExpireRemote(in rc.Params) (out rc.Params, err error) {
 		return out, nil
 	}
 	// expire the entry
-	co.CacheTs = time.Now().Add(f.fileAge * -1)
-	err = f.cache.AddObject(co)
+	err = f.cache.ExpireObject(co, withData)
 	if err != nil {
 		return out, errors.WithMessage(err, "error expiring file")
 	}
 	// notify vfs too
 	f.notifyChangeUpstream(co.Remote(), fs.EntryObject)
-	if withData {
-		// safe to ignore as the file might not have been open
-		_ = os.RemoveAll(path.Join(f.cache.dataPath, co.abs()))
-	}
 
 	out["status"] = "ok"
 	out["message"] = fmt.Sprintf("cached file cleared: %v", remote)
@@ -518,7 +511,16 @@ func (f *Fs) httpExpireRemote(in rc.Params) (out rc.Params, err error) {
 
 // receiveChangeNotify is a wrapper to notifications sent from the wrapped FS about changed files
 func (f *Fs) receiveChangeNotify(forgetPath string, entryType fs.EntryType) {
-	fs.Debugf(f, "notify: expiring cache for '%v'", forgetPath)
+	if crypt, yes := f.isWrappedByCrypt(); yes {
+		decryptedPath, err := crypt.DecryptFileName(forgetPath)
+		if err == nil {
+			fs.Infof(decryptedPath, "received cache expiry notification")
+		} else {
+			fs.Infof(forgetPath, "received cache expiry notification")
+		}
+	} else {
+		fs.Infof(forgetPath, "received cache expiry notification")
+	}
 	// notify upstreams too (vfs)
 	f.notifyChangeUpstream(forgetPath, entryType)
 
@@ -526,28 +528,27 @@ func (f *Fs) receiveChangeNotify(forgetPath string, entryType fs.EntryType) {
 	if entryType == fs.EntryObject {
 		co := NewObject(f, forgetPath)
 		err := f.cache.GetObject(co)
-		if err != nil {
-			fs.Debugf(f, "ignoring change notification for non cached entry %v", co)
-			return
-		}
-		// expire the entry
-		co.CacheTs = time.Now().Add(f.fileAge * -1)
-		err = f.cache.AddObject(co)
-		if err != nil {
-			fs.Errorf(forgetPath, "notify: error expiring '%v': %v", co, err)
+		if err == nil {
+			// expire the entry
+			err = f.cache.ExpireObject(co, true)
+			if err != nil {
+				fs.Debugf(forgetPath, "notify: error expiring '%v': %v", co, err)
+			} else {
+				fs.Debugf(forgetPath, "notify: expired %v", co)
+			}
 		} else {
-			fs.Debugf(forgetPath, "notify: expired %v", co)
+			fs.Debugf(f, "ignoring change notification for non cached entry %v", co)
 		}
 		cd = NewDirectory(f, cleanPath(path.Dir(co.Remote())))
 	} else {
 		cd = NewDirectory(f, forgetPath)
-		// we expire the dir
-		err := f.cache.ExpireDir(cd)
-		if err != nil {
-			fs.Errorf(forgetPath, "notify: error expiring '%v': %v", cd, err)
-		} else {
-			fs.Debugf(forgetPath, "notify: expired '%v'", cd)
-		}
+	}
+	// we expire the dir
+	err := f.cache.ExpireDir(cd)
+	if err != nil {
+		fs.Debugf(forgetPath, "notify: error expiring '%v': %v", cd, err)
+	} else {
+		fs.Debugf(forgetPath, "notify: expired '%v'", cd)
 	}
 
 	f.notifiedMu.Lock()

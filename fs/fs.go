@@ -83,6 +83,7 @@ type RegInfo struct {
 type Option struct {
 	Name       string
 	Help       string
+	Provider   string
 	Optional   bool
 	IsPassword bool
 	Examples   OptionExamples `json:",omitempty"`
@@ -105,8 +106,9 @@ func (os OptionExamples) Sort() { sort.Sort(os) }
 
 // OptionExample describes an example for an Option
 type OptionExample struct {
-	Value string
-	Help  string
+	Value    string
+	Help     string
+	Provider string
 }
 
 // Register a filesystem
@@ -328,6 +330,9 @@ type Features struct {
 	// as an optional interface
 	DirCacheFlush func()
 
+	// PublicLink generates a public link to the remote path (usually readable by anyone)
+	PublicLink func(remote string) (string, error)
+
 	// Put in to the remote path with the modTime given of the given size
 	//
 	// May create the object even if it returns an error - if so
@@ -442,6 +447,9 @@ func (ft *Features) Fill(f Fs) *Features {
 	}
 	if do, ok := f.(DirCacheFlusher); ok {
 		ft.DirCacheFlush = do.DirCacheFlush
+	}
+	if do, ok := f.(PublicLinker); ok {
+		ft.PublicLink = do.PublicLink
 	}
 	if do, ok := f.(PutUncheckeder); ok {
 		ft.PutUnchecked = do.PutUnchecked
@@ -640,6 +648,12 @@ type PutStreamer interface {
 	// will return the object and the error, otherwise will return
 	// nil and the error
 	PutStream(in io.Reader, src ObjectInfo, options ...OpenOption) (Object, error)
+}
+
+// PublicLinker is an optional interface for Fs
+type PublicLinker interface {
+	// PublicLink generates a public link to the remote path (usually readable by anyone)
+	PublicLink(remote string) (string, error)
 }
 
 // MergeDirser is an option interface for Fs

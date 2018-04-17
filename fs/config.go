@@ -22,6 +22,9 @@ var (
 	// This is a function pointer to decouple the config
 	// implementation from the fs
 	CountError = func(err error) {}
+
+	// ConfigProvider is the config key used for provider options
+	ConfigProvider = "provider"
 )
 
 // ConfigInfo is filesystem config options
@@ -33,6 +36,7 @@ type ConfigInfo struct {
 	SizeOnly              bool
 	IgnoreTimes           bool
 	IgnoreExisting        bool
+	IgnoreErrors          bool
 	ModifyWindow          time.Duration
 	Checkers              int
 	Transfers             int
@@ -66,6 +70,7 @@ type ConfigInfo struct {
 	StreamingUploadCutoff SizeSuffix
 	StatsFileNameLength   int
 	AskPassword           bool
+	UseServerModTime      bool
 }
 
 // NewConfig creates a new config with everything set to the default

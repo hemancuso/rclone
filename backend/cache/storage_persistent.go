@@ -1,4 +1,4 @@
-// +build !plan9,go1.7
+// +build !plan9
 
 package cache
 
@@ -398,6 +398,16 @@ func (b *Persistent) RemoveObject(fp string) error {
 		_ = os.RemoveAll(path.Join(b.dataPath, fp))
 		return nil
 	})
+}
+
+// ExpireObject will flush an Object and all its data if desired
+func (b *Persistent) ExpireObject(co *Object, withData bool) error {
+	co.CacheTs = time.Now().Add(co.CacheFs.fileAge * -1)
+	err := b.AddObject(co)
+	if withData {
+		_ = os.RemoveAll(path.Join(b.dataPath, co.abs()))
+	}
+	return err
 }
 
 // HasEntry confirms the existence of a single entry (dir or object)
