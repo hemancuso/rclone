@@ -53,7 +53,7 @@ const (
 	minSleep                    = 10 * time.Millisecond
 	maxSleep                    = 2 * time.Second
 	decayConstant               = 2 
-	rootURL                     = "https://exdrv.strongspace.com/api/v2/files"
+	rootURL                     = "https://expandrive.strongspace.com/api/v2/files"
 	metaMtime                   = "mtime" // key to store mtime under in metadata
 	listChunks                  = 1000    // chunk size to read directory listings
 )
@@ -350,11 +350,8 @@ func (f *Fs) list(dir string, recurse bool, fn listFn) error {
 
 
 	err = f.pacer.Call(func() (bool, error) {
-		fmt.Println("calling")
+
 		resp, err = f.srv.CallJSON(&opts, nil, &result)
-		fmt.Println("caled")
-		fmt.Println(err)
-		fmt.Println(resp)
 
 		return shouldRetry(resp, err)
 	})
@@ -726,6 +723,7 @@ func (o *Object) Hash(t hash.Type) (string, error) {
 
 // Size returns the size of an object in bytes
 func (o *Object) Size() int64 {
+	fmt.Println("SIX")
 	return o.bytes
 }
 
@@ -767,6 +765,7 @@ func (o *Object) setMetaData(info *storage.Object) {
 //
 // it also sets the info
 func (o *Object) readMetaData() (err error) {
+	fmt.Println("Read meta")
 	if !o.modTime.IsZero() {
 		return nil
 	}
@@ -848,28 +847,78 @@ func (o *Object) Open(options ...fs.OpenOption) (in io.ReadCloser, err error) {
 // The new object may have been created if an error is returned
 func (o *Object) Update(in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) error {
 
-	fmt.Println("insert object")
-	err := o.fs.Mkdir("")
-	if err != nil {
-		return err
-	}
-	modTime := src.ModTime()
+	fmt.Println(o.fs.bucket + "/" + o.fs.root + o.remote)
 
-	object := storage.Object{
-		Bucket:      o.fs.bucket,
-		Name:        o.fs.root + o.remote,
-		ContentType: fs.MimeType(src),
-		Updated:     modTime.Format(timeFormatOut), // Doesn't get set
-		Metadata:    metadataFromModTime(modTime),
+	opts := rest.Opts{
+		Method:     "POST",
+		Body:   in,
+		Path:       "/" + o.fs.bucket + "/" + o.fs.root + o.remote,
+		MultipartFileName:     "jeff",
 	}
-	newObject, err := o.fs.svc.Objects.Insert(o.fs.bucket, &object).Media(in, googleapi.ContentType("")).Name(object.Name).PredefinedAcl(o.fs.objectACL).Do()
+
+
+	var err error;
+
+	var resp *http.Response
+	var result FolderItems
+
+
+
+	err = o.fs.pacer.Call(func() (bool, error) {
+
+		resp, err = o.fs.srv.CallJSON(&opts, nil, &result)
+
+		return shouldRetry(resp, err)
+	})
+	o.bytes = src.Size()
+	fmt.Println(src.Size())
 	if err != nil {
-		return err
+		
+		// o.size = src.Size
+		// return found, errors.Wrap(err, "couldn't list files")
 	}
-	// Set the metadata for the new object while we have it
-	o.setMetaData(newObject)
+
+	// upload := api.UploadFile{
+	// 	Name:              replaceReservedChars(leaf),
+	// 	ContentModifiedAt: api.Time(modTime),
+	// 	ContentCreatedAt:  api.Time(modTime),
+	// 	Parent: api.Parent{
+	// 		ID: directoryID,
+	// 	},
+	// }
+
+	// var resp *http.Response
+	// var result FolderItems
+	// opts := rest.Opts{
+	// 	Method: "POST",
+	// 	Body:   in,
+	// 	MultipartMetadataName: "attributes",
+	// 	MultipartContentName:  "contents",
+	// }
+	// // If object has an ID then it is existing so create a new version
+	// if o.id != "" {
+	// 	opts.Path = "/files/" + o.id + "/content"
+	// } else {
+	// 	opts.Path = "/files/content"
+	// }
+	// err = o.fs.pacer.CallNoRetry(func() (bool, error) {
+	// 	resp, err = o.fs.srv.CallJSON(&opts, &upload, &result)
+	// 	return shouldRetry(resp, err)
+	// })
+	// if err != nil {
+	// 	return err
+	// }
+	// if result.TotalCount != 1 || len(result.Entries) != 1 {
+	// 	return errors.Errorf("failed to upload %v - not sure why", o)
+	// }
+	// return o.setMetaData(&result.Entries[0])
+
 	return nil
 }
+	// Set the metadata for the new object while we have it
+// 	o.setMetaData(newObject)
+// 	return nil
+// }
 
 // Remove an object
 func (o *Object) Remove() error {
