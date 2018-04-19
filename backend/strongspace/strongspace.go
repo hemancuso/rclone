@@ -24,6 +24,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	// "strconv"
 	"sync"
 	"time"
 
@@ -53,7 +54,7 @@ const (
 	minSleep                    = 10 * time.Millisecond
 	maxSleep                    = 2 * time.Second
 	decayConstant               = 2 
-	rootURL                     = "https://expandrive.strongspace.com/api/v2/files"
+	rootURL                     = "http://expandrive.strongspace.net:8000/api/v2/files"
 	metaMtime                   = "mtime" // key to store mtime under in metadata
 	listChunks                  = 1000    // chunk size to read directory listings
 )
@@ -64,8 +65,8 @@ var (
 	// Description of how to auth for this app
 	storageConfig = &oauth2.Config{
 		Endpoint: oauth2.Endpoint{
-			AuthURL:  "https://www2.strongspace.com/oauth/authorize",
-			TokenURL: "https://www2.strongspace.com/oauth/token",
+			AuthURL:  "http://www2.strongspace.net:8000/oauth/authorize",
+			TokenURL: "http://www2.strongspace.net:8000/oauth/token",
 		},
 		ClientID:     rcloneClientID,
 		ClientSecret: rcloneClientSecret,
@@ -301,8 +302,9 @@ type Item struct {
 	SHA1              string `json:"sha1"`
 	Name              string `json:"name"`
 	Size              int64  `json:"size"`
+	Folder 	          bool   `json:"folder"`
 	CreatedAt         Time   `json:"created_at"`
-	ModifiedAt        Time   `json:"modified_at"`
+	ModifiedAt        int64  `json:"mtime"`
 	ContentCreatedAt  Time   `json:"content_created_at"`
 	ContentModifiedAt Time   `json:"content_modified_at"`
 	ItemStatus        string `json:"item_status"` // active, trashed if the file has been moved to the trash, and deleted if the file has been permanently deleted
@@ -310,7 +312,7 @@ type Item struct {
 
 type FolderItems struct {
 	TotalCount int    `json:"total_count"`
-	Entries    []Item `json:"entries"`
+	Entries    []Item `json:"contents"`
 	Offset     int    `json:"offset"`
 	Limit      int    `json:"limit"`
 	Order      []struct {
@@ -326,20 +328,20 @@ type FolderItems struct {
 //
 // Set recurse to read sub directories
 func (f *Fs) list(dir string, recurse bool, fn listFn) error {
-	fmt.Println(" list " + dir)
-	fmt.Println(dir)
+
+
 
 	root := f.root
 	// rootLength := len(root)
-	fmt.Println(root)
+
 
 	if dir != "" {
-		root += dir + "/"
+		root += dir //+ "/"
 	}
 
 	opts := rest.Opts{
 		Method:     "GET",
-		Path:       "/",
+		Path:       "/" + f.bucket + "/" + root,
 	}
 
 
@@ -355,10 +357,22 @@ func (f *Fs) list(dir string, recurse bool, fn listFn) error {
 
 		return shouldRetry(resp, err)
 	})
+
+
 	if err != nil {
+		fmt.Println("err")
+		fmt.Println(err)
+		fmt.Println("that was it")
 		// return found, errors.Wrap(err, "couldn't list files")
 	}
-		// for i := range result.Entries {
+	// fmt.Println(result)
+//	for i := range result.Entries {
+
+//		item := &result.Entries[i]
+
+		// o, err := f.newObjectWithInfo("/" + f.bucket + "/" + root + "/", item)
+		// fn("/" + f.bucket + "/" + root + "/" + item.Name, o, false)
+	//}
 		// 	item := &result.Entries[i]
 		// 	if item.Type == api.ItemTypeFolder {
 		// 		if filesOnly {
@@ -469,19 +483,96 @@ func (f *Fs) markBucketOK() {
 // listDir lists a single directory
 func (f *Fs) listDir(dir string) (entries fs.DirEntries, err error) {
 	// List the objects
-	err = f.list(dir, false, func(remote string, object *storage.Object, isDirectory bool) error {
-		entry, err := f.itemToDirEntry(remote, object, isDirectory)
-		if err != nil {
-			return err
+	fmt.Println("listdir: " + f.bucket + "/" + dir)
+	fmt.Println("list: " + dir + " - 0 ")
+
+
+	root := f.root
+	// rootLength := len(root)
+	fmt.Println(f.bucket + "/" + root)
+
+	if dir != "" {
+		root += dir //+ "/"
+	}
+
+	opts := rest.Opts{
+		Method:     "GET",
+		Path:       "/" + f.bucket + "/" + root,
+	}
+
+
+
+
+	var resp *http.Response
+	var result FolderItems
+
+
+	err = f.pacer.Call(func() (bool, error) {
+
+		resp, err = f.srv.CallJSON(&opts, nil, &result)
+
+		return shouldRetry(resp, err)
+	})
+
+
+	if err != nil {
+		fmt.Println("err")
+		fmt.Println(err)
+		// return found, errors.Wrap(err, "couldn't list files")
+	}
+
+	for i := range result.Entries {
+		item := &result.Entries[i]
+
+
+		// f.bucket + "/" + root +
+
+		remote :=  item.Name
+		if len(dir) > 0 {
+			remote = dir + "/" + item.Name
 		}
-		if entry != nil {
+		entry := &Object{
+			fs:     f,
+			remote:  remote,
+			bytes: item.Size,
+			modTime: time.Unix(item.ModifiedAt, 0),
+			url: rootURL + "/" + f.bucket + "/" + f.root + remote,
+		}
+
+
+		// if info != nil {
+		// 	o.setMetaData(info)
+		// } else {
+		// 	err := o.readMetaData() // reads info and meta, returning an error
+		// 	if err != nil {
+		// 		return nil, err
+		// 	}
+		// }
+
+		// entry, err := f.itemToDirEntry(remote, item, false)
+
+		if item.Folder == true {
+			entries = append(entries, fs.NewDir(remote, time.Unix(item.ModifiedAt, 0)))
+		} else if entry != nil {
 			entries = append(entries, entry)
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
+		// o, err := f.newObjectWithInfo("/" + f.bucket + "/" + root + "/", item)
+		// fn("/" + f.bucket + "/" + root + "/" + item.Name, o, false)
 	}
+
+	// err = f.list(dir, false, func(remote string, object *storage.Object, isDirectory bool) error {
+	// 	entry, err := f.itemToDirEntry(remote, object, isDirectory)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// 	if entry != nil {
+	// 		entries = append(entries, entry)
+	// 	}
+	// 	return nil
+	// })
+	// if err != nil {
+	// 	return nil, err
+	// }
 	// bucket must be present if listing succeeded
 	f.markBucketOK()
 	return entries, err
@@ -528,6 +619,7 @@ func (f *Fs) listBuckets(dir string) (entries fs.DirEntries, err error) {
 // This should return ErrDirNotFound if the directory isn't
 // found.
 func (f *Fs) List(dir string) (entries fs.DirEntries, err error) {
+
 	if f.bucket == "" {
 		return f.listBuckets(dir)
 	}
@@ -576,7 +668,7 @@ func (f *Fs) ListR(dir string, callback fs.ListRCallback) (err error) {
 //
 // The new object may have been created if an error is returned
 func (f *Fs) Put(in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
-	fmt.Println("put")
+
 	// Temporary Object under construction
 	o := &Object{
 		fs:     f,
@@ -587,12 +679,13 @@ func (f *Fs) Put(in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.
 
 // PutStream uploads to the remote path with the modTime given of indeterminate size
 func (f *Fs) PutStream(in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
-	fmt.Println("putstream")
+
 	return f.Put(in, src, options...)
 }
 
 // Mkdir creates the bucket if it doesn't exist
 func (f *Fs) Mkdir(dir string) error {
+	fmt.Println("MKDIR " + dir)
 	f.bucketOKMu.Lock()
 	defer f.bucketOKMu.Unlock()
 	if f.bucketOK {
@@ -646,7 +739,7 @@ func (f *Fs) Rmdir(dir string) error {
 
 // Precision returns the precision
 func (f *Fs) Precision() time.Duration {
-	return time.Nanosecond
+	return time.Second
 }
 
 // Copy src to this remote using server side copy operations.
@@ -723,7 +816,6 @@ func (o *Object) Hash(t hash.Type) (string, error) {
 
 // Size returns the size of an object in bytes
 func (o *Object) Size() int64 {
-	fmt.Println("SIX")
 	return o.bytes
 }
 
@@ -765,7 +857,7 @@ func (o *Object) setMetaData(info *storage.Object) {
 //
 // it also sets the info
 func (o *Object) readMetaData() (err error) {
-	fmt.Println("Read meta")
+
 	if !o.modTime.IsZero() {
 		return nil
 	}
@@ -825,6 +917,8 @@ func (o *Object) Storable() bool {
 
 // Open an object for read
 func (o *Object) Open(options ...fs.OpenOption) (in io.ReadCloser, err error) {
+	fmt.Println("open")
+	fmt.Println(o.url)
 	req, err := http.NewRequest("GET", o.url, nil)
 	if err != nil {
 		return nil, err
@@ -847,13 +941,18 @@ func (o *Object) Open(options ...fs.OpenOption) (in io.ReadCloser, err error) {
 // The new object may have been created if an error is returned
 func (o *Object) Update(in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) error {
 
-	fmt.Println(o.fs.bucket + "/" + o.fs.root + o.remote)
+
+
+	t := fmt.Sprintf("%d", src.ModTime().Unix())
+
+
 
 	opts := rest.Opts{
 		Method:     "POST",
 		Body:   in,
 		Path:       "/" + o.fs.bucket + "/" + o.fs.root + o.remote,
 		MultipartFileName:     "jeff",
+		ExtraHeaders: map[string]string{"attributes": "{\"modified_at\": " + t  + "}"}, 
 	}
 
 
@@ -871,7 +970,7 @@ func (o *Object) Update(in io.Reader, src fs.ObjectInfo, options ...fs.OpenOptio
 		return shouldRetry(resp, err)
 	})
 	o.bytes = src.Size()
-	fmt.Println(src.Size())
+
 	if err != nil {
 		
 		// o.size = src.Size

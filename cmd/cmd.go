@@ -125,7 +125,7 @@ func runRoot(cmd *cobra.Command, args []string) {
 
 func init() {
 	// Add global flags
-	// configflags.AddFlags(pflag.CommandLine)
+	configflags.AddFlags(pflag.CommandLine)
 	// filterflags.AddFlags(pflag.CommandLine)
 	// rcflags.AddFlags(pflag.CommandLine)
 
